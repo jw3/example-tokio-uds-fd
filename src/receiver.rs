@@ -1,4 +1,3 @@
-use bincode;
 use clap::Parser;
 use example_tokio_uds_fd::FileMetadata;
 use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
@@ -90,7 +89,7 @@ impl SocketRx {
 
             // the lifetime of the RecvMsg is tricky, this match and extract solves it
             let received = match recvmsg::<()>(stream.as_raw_fd(), &mut iov, Some(&mut cmsg_buf), MsgFlags::empty()) {
-                Ok(res) => (res.bytes, res.cmsgs().collect()),
+                Ok(res) => (res.bytes, res.cmsgs()?.collect()),
                 Err(_) => (0, vec![]),
             };
 
@@ -158,7 +157,7 @@ impl SocketRx {
 
 impl Drop for SocketRx {
     fn drop(&mut self) {
-        if let Err(_) = fs::remove_file(&self.socket_path) {
+        if fs::remove_file(&self.socket_path).is_err() {
             println!("rx: error rm socket file {}", self.socket_path);
         }
     }

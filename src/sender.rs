@@ -1,5 +1,4 @@
 use anyhow::{bail, Context};
-use bincode;
 use clap::Parser;
 use example_tokio_uds_fd::FileMetadata;
 use nix::sys::socket::{sendmsg, ControlMessage, MsgFlags, UnixAddr};
