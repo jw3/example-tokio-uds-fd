@@ -1,3 +1,5 @@
+extern crate core;
+
 use clap::Parser;
 use example_tokio_uds_fd::FileMetadata;
 use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
@@ -85,18 +87,31 @@ impl SocketRx {
         loop {
             let mut recv_buf = vec![0u8; 8192];
             let mut cmsg_buf = vec![0u8; 1024];
-            let mut iov = [IoSliceMut::new(&mut recv_buf)];
+
+            let mut t = [0u8; 2];
+            let mut size = [0u8; 2];
+            let mut iov = [IoSliceMut::new(&mut t), IoSliceMut::new(&mut size), IoSliceMut::new(&mut recv_buf)];
 
             // the lifetime of the RecvMsg is tricky, this match and extract solves it
             let received = match recvmsg::<()>(stream.as_raw_fd(), &mut iov, Some(&mut cmsg_buf), MsgFlags::empty()) {
-                Ok(res) => (res.bytes, res.cmsgs()?.collect()),
-                Err(_) => (0, vec![]),
+                Ok(res) => {
+                    let mut iter = res.iovs();
+                    if let Some(iov) =  iter.next() {
+                        println!("type: ------------- {:#x}", u16::from_be_bytes(iov.try_into()?));
+                    }
+                    if let Some(iov) =  iter.next() {
+                        println!("size: ------------- {}", u16::from_be_bytes(iov.try_into()?));
+                    }
+                    (res.bytes, iter.next(), res.cmsgs()?.collect())
+                },
+                Err(_) => (0, None, vec![]),
             };
 
             match received {
-                (0, _) => break,
-                (bytes, cmsgs) => match bincode::deserialize::<FileMetadata>(&recv_buf[..bytes]) {
+                (0, _, _) => break,
+                (bytes, Some(iov ), cmsgs) => match bincode::deserialize::<FileMetadata>(iov) {
                     Ok(metadata) => {
+                        println!("==========From iov==========");
                         println!("Received {:?} metadata:", metadata.file_type);
                         println!("\tPath: {}", metadata.path);
                         println!("\tType: {:?}", metadata.file_type);
@@ -142,12 +157,14 @@ impl SocketRx {
                                 }
                             }
                         }
-                        println!("==============================");
                     }
                     Err(e) => {
                         eprintln!("failed to deserialize metadata: {}", e);
                     }
                 },
+                (bytes, None, _) => {
+                    println!("no iov - received bytes: {:?}", bytes);
+                }
             }
         }
 
