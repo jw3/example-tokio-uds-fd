@@ -88,37 +88,48 @@ impl SocketRx {
             let mut cmsg_buf = vec![0u8; 1024];
 
             let mut t = [0u8; 2];
-            let mut size = [0u8; 2];
-            let mut iov = [IoSliceMut::new(&mut t), IoSliceMut::new(&mut size)];
+            let mut size1 = [0u8; 2];
+            let mut size2 = [0u8; 2];
+            let mut iov = [IoSliceMut::new(&mut t), IoSliceMut::new(&mut size1), IoSliceMut::new(&mut size2)];
 
-            let (payload_sz, cmsg) = match recvmsg::<()>(stream.as_raw_fd(), &mut iov, Some(&mut cmsg_buf), MsgFlags::empty()) {
+            let (sz1, sz2, cmsg) = match recvmsg::<()>(stream.as_raw_fd(), &mut iov, Some(&mut cmsg_buf), MsgFlags::empty()) {
                 Ok(res) => {
+                    if res.bytes == 0 {
+                        println!(">> done <<");
+                        break;
+                    }
                     let mut iter = res.iovs();
                     if let Some(iov) =  iter.next() {
                         println!("type: ------------- {:#x}", u16::from_be_bytes(iov.try_into()?));
                     }
-                    let iov = iter.next().ok_or(anyhow::anyhow!("no iov"))?;
-                    let sz = u16::from_be_bytes(iov.try_into()?);
-                    println!("size: ------------- {sz}");
-                    (sz, res.cmsgs()?.collect())
+                    let iov1 = iter.next().ok_or(anyhow::anyhow!("no iov1"))?;
+                    let sz1 = u16::from_be_bytes(iov1.try_into()?);
+                    let iov2 = iter.next().ok_or(anyhow::anyhow!("no iov2"))?;
+                    let sz2 = u16::from_be_bytes(iov2.try_into()?);
+                    println!("sizes: ----  {sz1}  ------ {sz2}");
+                    (sz1, sz2, res.cmsgs()?.collect())
                 },
-                Err(_) => (0, vec![]),
+                Err(_) => (0, 0, vec![]),
             };
 
-            let mut recv_buf = vec![0u8; payload_sz as usize];
-            let mut payload = [IoSliceMut::new(&mut recv_buf)];
+            let mut recv_buf1 = vec![0u8; sz1 as usize];
+            let mut recv_buf2 = vec![0u8; sz2 as usize];
+            let mut payloads = [IoSliceMut::new(&mut recv_buf1), IoSliceMut::new(&mut recv_buf2)];
 
-            let (sz, payload) =  match recvmsg::<()>(stream.as_raw_fd(), &mut payload, None, MsgFlags::empty()) {
+            let (sz, payload) =  match recvmsg::<()>(stream.as_raw_fd(), &mut payloads, None, MsgFlags::empty()) {
                 Ok(res) => {
-                    let payload_1 = res.iovs().next().unwrap();
+                    let mut iter = res.iovs();
+                    let payload_1 = iter.next().unwrap();
+                    let payload_2 = iter.next().unwrap();
+                    println!("payload2- {}", String::from_utf8_lossy(payload_2));
                     (res.bytes, Some(payload_1))
                 }
                 Err(e) => (0, None),
             };
 
-            match (payload_sz, payload, cmsg) {
+            match (sz, payload, cmsg) {
                 (0, _, _) => break,
-                (bytes, Some(iov ), cmsgs) => match bincode::deserialize::<FileMetadata>(iov) {
+                (bytes, Some(iov), cmsgs) => match bincode::deserialize::<FileMetadata>(iov) {
                     Ok(metadata) => {
                         println!("==========From iov==========");
                         println!("Received {:?} metadata:", metadata.file_type);

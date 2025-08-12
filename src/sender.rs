@@ -96,11 +96,15 @@ fn worker(socket_path: PathBuf, mut rx: mpsc::Receiver<Msg>) -> anyhow::Result<(
 // only split out to make error handling more concise
 fn send_msg(stream: &mut UnixStream, mut message: Msg) -> anyhow::Result<()> {
     let serialized = bincode::serialize(&message.meta)?;
+    let second_payload = "!*-*-*-*-*-*-*-*-*-*-*!";
     let t = 1u16.to_be_bytes();
-    let size  = (serialized.len() as u16).to_be_bytes();
+    let size1  = (serialized.len() as u16).to_be_bytes();
+    let size2  = (second_payload.len() as u16).to_be_bytes();
     let io_slice1 = IoSlice::new(&t);
-    let io_slice2 = IoSlice::new(&size);
-    let io_slice3 = IoSlice::new(&serialized);
+    let io_slice2 = IoSlice::new(&size1);
+    let io_slice3 = IoSlice::new(&size2);
+    let io_slice4 = IoSlice::new(&serialized);
+    let io_slice5 = IoSlice::new(second_payload.as_bytes());
 
     let fd_array;
     let control_messages = if let Some(file) = message.file.take() {
@@ -113,7 +117,7 @@ fn send_msg(stream: &mut UnixStream, mut message: Msg) -> anyhow::Result<()> {
 
     sendmsg(
         stream.as_raw_fd(),
-        &[io_slice1, io_slice2, io_slice3],
+        &[io_slice1, io_slice2, io_slice3, io_slice4, io_slice5],
         &control_messages,
         MsgFlags::empty(),
         None::<&UnixAddr>,
