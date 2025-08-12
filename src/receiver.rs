@@ -85,29 +85,38 @@ impl SocketRx {
 
     fn handle(&mut self, stream: UnixStream) -> anyhow::Result<()> {
         loop {
-            let mut recv_buf = vec![0u8; 8192];
             let mut cmsg_buf = vec![0u8; 1024];
 
             let mut t = [0u8; 2];
             let mut size = [0u8; 2];
-            let mut iov = [IoSliceMut::new(&mut t), IoSliceMut::new(&mut size), IoSliceMut::new(&mut recv_buf)];
+            let mut iov = [IoSliceMut::new(&mut t), IoSliceMut::new(&mut size)];
 
-            // the lifetime of the RecvMsg is tricky, this match and extract solves it
-            let received = match recvmsg::<()>(stream.as_raw_fd(), &mut iov, Some(&mut cmsg_buf), MsgFlags::empty()) {
+            let (payload_sz, cmsg) = match recvmsg::<()>(stream.as_raw_fd(), &mut iov, Some(&mut cmsg_buf), MsgFlags::empty()) {
                 Ok(res) => {
                     let mut iter = res.iovs();
                     if let Some(iov) =  iter.next() {
                         println!("type: ------------- {:#x}", u16::from_be_bytes(iov.try_into()?));
                     }
-                    if let Some(iov) =  iter.next() {
-                        println!("size: ------------- {}", u16::from_be_bytes(iov.try_into()?));
-                    }
-                    (res.bytes, iter.next(), res.cmsgs()?.collect())
+                    let iov = iter.next().ok_or(anyhow::anyhow!("no iov"))?;
+                    let sz = u16::from_be_bytes(iov.try_into()?);
+                    println!("size: ------------- {sz}");
+                    (sz, res.cmsgs()?.collect())
                 },
-                Err(_) => (0, None, vec![]),
+                Err(_) => (0, vec![]),
             };
 
-            match received {
+            let mut recv_buf = vec![0u8; payload_sz as usize];
+            let mut payload = [IoSliceMut::new(&mut recv_buf)];
+
+            let (sz, payload) =  match recvmsg::<()>(stream.as_raw_fd(), &mut payload, None, MsgFlags::empty()) {
+                Ok(res) => {
+                    let payload_1 = res.iovs().next().unwrap();
+                    (res.bytes, Some(payload_1))
+                }
+                Err(e) => (0, None),
+            };
+
+            match (payload_sz, payload, cmsg) {
                 (0, _, _) => break,
                 (bytes, Some(iov ), cmsgs) => match bincode::deserialize::<FileMetadata>(iov) {
                     Ok(metadata) => {
