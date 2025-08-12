@@ -8,11 +8,11 @@ use std::io::{IoSliceMut, Read};
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use tokio::net::{UnixListener, UnixStream};
 
 #[derive(Debug, Parser)]
 pub struct Opts {
@@ -20,7 +20,8 @@ pub struct Opts {
     socket_path: PathBuf,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let opts: Opts = Opts::parse();
     if opts.socket_path.exists() {
         fs::remove_file(&opts.socket_path)?;
@@ -42,7 +43,7 @@ fn main() -> anyhow::Result<()> {
     .expect("ctrl+c");
 
     println!("starting on socket: {}", opts.socket_path.display());
-    rx.listen()
+    rx.listen().await
 }
 
 struct SocketRx {
@@ -58,7 +59,7 @@ impl SocketRx {
         }
     }
 
-    pub fn listen(&mut self) -> anyhow::Result<()> {
+    pub async fn listen(&mut self) -> anyhow::Result<()> {
         println!("uds @ {}", self.socket_path);
         let listener = UnixListener::bind(&self.socket_path)?;
 
@@ -67,24 +68,18 @@ impl SocketRx {
 
         println!("listening...");
 
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    println!("connected...");
-                    if let Err(e) = self.handle(stream) {
-                        eprintln!("error handling connection: {e}");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("error connecting: {e}");
-                }
+        while let Ok((stream, _)) = listener.accept().await {
+            println!("connected...");
+            if let Err(e) = self.handle(stream).await {
+                eprintln!("error handling connection: {e}");
             }
         }
         Ok(())
     }
 
-    fn handle(&mut self, stream: UnixStream) -> anyhow::Result<()> {
+    async fn handle(&mut self, stream: UnixStream) -> anyhow::Result<()> {
         loop {
+            stream.readable().await?;
             let mut cmsg_buf = vec![0u8; 1024];
 
             let mut t = [0u8; 2];
@@ -124,12 +119,12 @@ impl SocketRx {
                     println!("payload2- {}", String::from_utf8_lossy(payload_2));
                     (res.bytes, Some(payload_1))
                 }
-                Err(e) => (0, None),
+                Err(_) => (0, None),
             };
 
             match (sz, payload, cmsg) {
                 (0, _, _) => break,
-                (bytes, Some(iov), cmsgs) => match bincode::deserialize::<FileMetadata>(iov) {
+                (_, Some(iov), cmsgs) => match bincode::deserialize::<FileMetadata>(iov) {
                     Ok(metadata) => {
                         println!("==========From iov==========");
                         println!("Received {:?} metadata:", metadata.file_type);
