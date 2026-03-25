@@ -15,6 +15,7 @@ use std::sync::Arc;
 use anyhow::bail;
 use nix::cmsg_space;
 use nix::errno::Errno;
+use nix::libc::pathconf;
 use tokio::net::{UnixListener, UnixStream};
 
 #[derive(Debug, Parser)]
@@ -85,9 +86,9 @@ impl SocketRx {
         loop {
             stream.readable().await?;
             let mut cmsg_buf = cmsg_space!(RawFd);
-            let mut x = X::default();
+            let mut header = HeaderData::default();
 
-            let cmsgs: Vec<_> = match recvmsg::<()>(stream.as_raw_fd(), &mut x.header_iov(), Some(&mut cmsg_buf), MsgFlags::empty()) {
+            let cmsgs: Vec<_> = match recvmsg::<()>(stream.as_raw_fd(), &mut header.vectors(), Some(&mut cmsg_buf), MsgFlags::empty()) {
                 Ok(res) => {
                     if res.bytes == 0 {
                         println!(">> done <<");
@@ -99,25 +100,23 @@ impl SocketRx {
                 Err(e) => bail!("recvmsg 1 failed: {e}"),
             };
 
-            println!("{}", x.s2());
-
             stream.readable().await?;
-            // let mut pl = x.payload();
-            let sz = match  recvmsg::<()>(stream.as_raw_fd(), &mut x.payload_iov(), None, MsgFlags::empty()) {
+            let mut payload: PayloadData = header.into();
+            let sz = match  recvmsg::<()>(stream.as_raw_fd(), &mut payload.vectors(), None, MsgFlags::empty()) {
                 Ok(res) => res.bytes,
                 Err(e) => bail!("recvmsg 2 failed: {e}"),
             };
 
-            println!("payload 1: {}", x.d1.len());
-            println!("payload2- {}", String::from_utf8_lossy(x.d2.as_slice()));
+            println!("payload 1: {}", payload.d1.len());
+            println!("payload2- {}", String::from_utf8_lossy(payload.d2.as_slice()));
 
             match (sz, cmsgs) {
                 (0, _) => break,
-                (_, cmsgs) => match bincode::deserialize::<FileMetadata>(x.d1.as_slice()) {
+                (_, cmsgs) => match bincode::deserialize::<FileMetadata>(payload.d1.as_slice()) {
                     Ok(metadata) => {
                         i += 1;
                         println!("=========={i} From iov==========");
-                        println!("Received {:?} metadata:", metadata.file_type);
+                        println!("Received {:?} metadata (payload1):", metadata.file_type);
                         println!("\tPath: {}", metadata.path);
                         println!("\tType: {:?}", metadata.file_type);
                         println!("\tSize: {} bytes", metadata.size);
@@ -183,14 +182,12 @@ impl Drop for SocketRx {
 }
 
 #[derive(Default)]
-struct X {
+struct HeaderData {
     t: [u8; 2],
     s1: [u8; 2],
     s2: [u8; 2],
-    d1: Vec<u8>,
-    d2: Vec<u8>,
 }
-impl X {
+impl HeaderData {
     fn t(&self) -> u16 {
         u16::from_ne_bytes(self.t)
     }
@@ -200,12 +197,35 @@ impl X {
     fn s2(&self) -> u16 {
         u16::from_ne_bytes(self.s2)
     }
-    fn header_iov(&mut self) -> Vec<IoSliceMut<'_>> {
+    fn vectors(&mut self) -> Vec<IoSliceMut<'_>> {
         vec![IoSliceMut::new(&mut self.t), IoSliceMut::new(&mut self.s1), IoSliceMut::new(&mut self.s2)]
     }
-    fn payload_iov(&mut self) -> Vec<IoSliceMut<'_>> {
-        self.d1.resize(self.s1() as usize, 0);
-        self.d2.resize(self.s2() as usize, 0);
+}
+
+struct PayloadData {
+    s1: u16,
+    s2: u16,
+    d1: Vec<u8>,
+    d2: Vec<u8>,
+}
+
+impl PayloadData {
+    fn new(s1: u16, s2: u16) -> Self {
+        PayloadData {
+            s1, s2,
+            d1: vec![],
+            d2: vec![],
+        }
+    }
+    fn vectors(&mut self) -> Vec<IoSliceMut<'_>> {
+        self.d1.resize(self.s1 as usize, 0);
+        self.d2.resize(self.s2 as usize, 0);
         vec![IoSliceMut::new(&mut self.d1), IoSliceMut::new(&mut self.d2)]
+    }
+}
+
+impl From<HeaderData> for PayloadData {
+    fn from(hd: HeaderData) -> Self {
+        PayloadData::new(hd.s1(), hd.s2())
     }
 }
