@@ -23,8 +23,17 @@ pub struct Opts {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opts = Opts::parse();
-    if opts.socket_path.is_dir() || opts.socket_path.is_file() || !opts.socket_path.exists() {
+    if opts.socket_path.is_dir() || opts.socket_path.is_file() {
         bail!("{} is not a socket", opts.socket_path.display());
+    }
+
+    for i in 0..=5 {
+        if !opts.socket_path.exists() && i == 5 {
+            bail!("{} is not a socket", opts.socket_path.display());
+        } else if opts.socket_path.exists() {
+            break
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 
     let tx = SocketTx::new(&opts.socket_path);
