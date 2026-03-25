@@ -5,13 +5,14 @@ use example_tokio_uds_fd::FileMetadata;
 use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
 use std::fs;
 use std::io::{IoSliceMut, Read};
-use std::os::fd::FromRawFd;
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use nix::cmsg_space;
 use tokio::net::{UnixListener, UnixStream};
 
 #[derive(Debug, Parser)]
@@ -80,7 +81,7 @@ impl SocketRx {
     async fn handle(&mut self, stream: UnixStream) -> anyhow::Result<()> {
         loop {
             stream.readable().await?;
-            let mut cmsg_buf = vec![0u8; 1024];
+            let mut cmsg_buf = cmsg_space!(RawFd);
 
             let mut t = [0u8; 2];
             let mut size1 = [0u8; 2];
@@ -136,12 +137,13 @@ impl SocketRx {
                         println!("\tMIME: {}", metadata.mime_type);
                         println!("\tExecutable: {}", metadata.is_executable);
 
-                        let mut received_fd: Option<RawFd> = None;
+                        let mut received_fd: Option<OwnedFd> = None;
                         for cmsg in cmsgs {
                             match cmsg {
                                 ControlMessageOwned::ScmRights(fds) => {
                                     if !fds.is_empty() {
-                                        received_fd = Some(fds[0]);
+                                        // take ownership of the fd
+                                        received_fd = Some(unsafe { OwnedFd::from_raw_fd(fds[0]) });
                                         println!("\tfd: {}", fds[0]);
                                     }
                                 }
@@ -151,8 +153,7 @@ impl SocketRx {
                             }
                         }
                         if let Some(fd) = received_fd {
-                            // take ownership of the fd
-                            let mut file = unsafe { fs::File::from_raw_fd(fd) };
+                            let mut file = fs::File::from(fd);
 
                             let mut contents = String::new();
                             match file.read_to_string(&mut contents) {
