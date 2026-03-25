@@ -213,13 +213,11 @@ impl PayloadData {
     fn new(s1: u16, s2: u16) -> Self {
         PayloadData {
             s1, s2,
-            d1: vec![],
-            d2: vec![],
+            d1: vec![0; s1 as usize],
+            d2: vec![0; s2 as usize],
         }
     }
     fn vectors(&mut self) -> Vec<IoSliceMut<'_>> {
-        self.d1.resize(self.s1 as usize, 0);
-        self.d2.resize(self.s2 as usize, 0);
         vec![IoSliceMut::new(&mut self.d1), IoSliceMut::new(&mut self.d2)]
     }
 }
