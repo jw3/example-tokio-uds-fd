@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
         } else if opts.socket_path.exists() {
             break
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 
     let tx = SocketTx::new(&opts.socket_path);
@@ -48,6 +48,8 @@ async fn main() -> anyhow::Result<()> {
         Ok(()) => println!("done"),
         Err(e) => println!("error: {}", e),
     }
+
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     Ok(())
 }
@@ -106,10 +108,10 @@ fn worker(socket_path: PathBuf, mut rx: mpsc::Receiver<Msg>) -> anyhow::Result<(
 fn send_msg(stream: &mut UnixStream, mut message: Msg) -> anyhow::Result<()> {
     let serialized = bincode::serialize(&message.meta)?;
     let second_payload = "!*-*-*-*-*-*-*-*-*-*-*!";
-    let t = 1u16.to_be_bytes();
-    let size1  = (serialized.len() as u16).to_be_bytes();
+    let t = 1u16.to_ne_bytes();
+    let size1  = (serialized.len() as u16).to_ne_bytes();
     println!("size1: {}", serialized.len());
-    let size2  = (second_payload.len() as u16).to_be_bytes();
+    let size2  = (second_payload.len() as u16).to_ne_bytes();
     let io_slice1 = IoSlice::new(&t);
     let io_slice2 = IoSlice::new(&size1);
     let io_slice3 = IoSlice::new(&size2);

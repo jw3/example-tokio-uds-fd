@@ -4,7 +4,7 @@ use clap::Parser;
 use example_tokio_uds_fd::FileMetadata;
 use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
 use std::fs;
-use std::io::{IoSliceMut, Read};
+use std::io::{ IoSliceMut, Read};
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use anyhow::bail;
 use nix::cmsg_space;
+use nix::errno::Errno;
 use tokio::net::{UnixListener, UnixStream};
 
 #[derive(Debug, Parser)]
@@ -79,56 +81,42 @@ impl SocketRx {
     }
 
     async fn handle(&mut self, stream: UnixStream) -> anyhow::Result<()> {
+        let mut i = 0;
         loop {
             stream.readable().await?;
             let mut cmsg_buf = cmsg_space!(RawFd);
+            let mut x = X::default();
 
-            let mut t = [0u8; 2];
-            let mut size1 = [0u8; 2];
-            let mut size2 = [0u8; 2];
-            let mut iov = [IoSliceMut::new(&mut t), IoSliceMut::new(&mut size1), IoSliceMut::new(&mut size2)];
-
-            let (sz1, sz2, cmsg) = match recvmsg::<()>(stream.as_raw_fd(), &mut iov, Some(&mut cmsg_buf), MsgFlags::empty()) {
+            let cmsgs: Vec<_> = match recvmsg::<()>(stream.as_raw_fd(), &mut x.header_iov(), Some(&mut cmsg_buf), MsgFlags::empty()) {
                 Ok(res) => {
                     if res.bytes == 0 {
                         println!(">> done <<");
                         break;
                     }
-                    let mut iter = res.iovs();
-                    if let Some(iov) =  iter.next() {
-                        println!("type: ------------- {:#x}", u16::from_be_bytes(iov.try_into()?));
-                    }
-                    let iov1 = iter.next().ok_or(anyhow::anyhow!("no iov1"))?;
-                    let sz1 = u16::from_be_bytes(iov1.try_into()?);
-                    let iov2 = iter.next().ok_or(anyhow::anyhow!("no iov2"))?;
-                    let sz2 = u16::from_be_bytes(iov2.try_into()?);
-                    println!("sizes: ----  {sz1}  ------ {sz2}");
-                    (sz1, sz2, res.cmsgs()?.collect())
+                    res.cmsgs()?.collect()
                 },
-                Err(_) => (0, 0, vec![]),
+                Err(Errno::EAGAIN) => continue,
+                Err(e) => bail!("recvmsg 1 failed: {e}"),
             };
 
-            let mut recv_buf1 = vec![0u8; sz1 as usize];
-            let mut recv_buf2 = vec![0u8; sz2 as usize];
-            let mut payloads = [IoSliceMut::new(&mut recv_buf1), IoSliceMut::new(&mut recv_buf2)];
+            println!("{}", x.s2());
 
-            let (sz, payload) =  match recvmsg::<()>(stream.as_raw_fd(), &mut payloads, None, MsgFlags::empty()) {
-                Ok(res) => {
-                    let mut iter = res.iovs();
-                    let payload_1 = iter.next().unwrap();
-                    println!("payload 1: {}", payload_1.len());
-                    let payload_2 = iter.next().unwrap();
-                    println!("payload2- {}", String::from_utf8_lossy(payload_2));
-                    (res.bytes, Some(payload_1))
-                }
-                Err(_) => (0, None),
+            stream.readable().await?;
+            // let mut pl = x.payload();
+            let sz = match  recvmsg::<()>(stream.as_raw_fd(), &mut x.payload_iov(), None, MsgFlags::empty()) {
+                Ok(res) => res.bytes,
+                Err(e) => bail!("recvmsg 2 failed: {e}"),
             };
 
-            match (sz, payload, cmsg) {
-                (0, _, _) => break,
-                (_, Some(iov), cmsgs) => match bincode::deserialize::<FileMetadata>(iov) {
+            println!("payload 1: {}", x.d1.len());
+            println!("payload2- {}", String::from_utf8_lossy(x.d2.as_slice()));
+
+            match (sz, cmsgs) {
+                (0, _) => break,
+                (_, cmsgs) => match bincode::deserialize::<FileMetadata>(x.d1.as_slice()) {
                     Ok(metadata) => {
-                        println!("==========From iov==========");
+                        i += 1;
+                        println!("=========={i} From iov==========");
                         println!("Received {:?} metadata:", metadata.file_type);
                         println!("\tPath: {}", metadata.path);
                         println!("\tType: {:?}", metadata.file_type);
@@ -178,9 +166,6 @@ impl SocketRx {
                     Err(e) => {
                         eprintln!("failed to deserialize metadata: {}", e);
                     }
-                },
-                (bytes, None, _) => {
-                    println!("no iov - received bytes: {:?}", bytes);
                 }
             }
         }
@@ -194,5 +179,33 @@ impl Drop for SocketRx {
         if fs::remove_file(&self.socket_path).is_err() {
             println!("rx: error rm socket file {}", self.socket_path);
         }
+    }
+}
+
+#[derive(Default)]
+struct X {
+    t: [u8; 2],
+    s1: [u8; 2],
+    s2: [u8; 2],
+    d1: Vec<u8>,
+    d2: Vec<u8>,
+}
+impl X {
+    fn t(&self) -> u16 {
+        u16::from_ne_bytes(self.t)
+    }
+    fn s1(&self) -> u16 {
+        u16::from_ne_bytes(self.s1)
+    }
+    fn s2(&self) -> u16 {
+        u16::from_ne_bytes(self.s2)
+    }
+    fn header_iov(&mut self) -> Vec<IoSliceMut<'_>> {
+        vec![IoSliceMut::new(&mut self.t), IoSliceMut::new(&mut self.s1), IoSliceMut::new(&mut self.s2)]
+    }
+    fn payload_iov(&mut self) -> Vec<IoSliceMut<'_>> {
+        self.d1.resize(self.s1() as usize, 0);
+        self.d2.resize(self.s2() as usize, 0);
+        vec![IoSliceMut::new(&mut self.d1), IoSliceMut::new(&mut self.d2)]
     }
 }
