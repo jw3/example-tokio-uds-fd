@@ -115,6 +115,7 @@ impl SocketRx {
                 Ok(res) => {
                     let mut iter = res.iovs();
                     let payload_1 = iter.next().unwrap();
+                    println!("payload 1: {}", payload_1.len());
                     let payload_2 = iter.next().unwrap();
                     println!("payload2- {}", String::from_utf8_lossy(payload_2));
                     (res.bytes, Some(payload_1))

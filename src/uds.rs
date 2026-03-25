@@ -2,7 +2,9 @@ use std::io::IoSlice;
 use nix::sys::socket::ControlMessage;
 
 trait ToOutgoing {
-    fn to_outgoing(&self) -> OutgoingMsg;
+    type H;
+    type P;
+    fn to_outgoing<'a>(&self, h: &'a Self::H, p: &'a Self::P) ->  OutgoingMsg<'a> ;
 }
 
 trait ToIncoming {
@@ -27,7 +29,7 @@ impl<'a> OutgoingMsg<'a> {
     }
 }
 
-fn send(o: &OutgoingMsg) {
+fn send<H, P>(o: &OutgoingMsg) {
     println!("send");
 }
 
@@ -40,27 +42,55 @@ mod tests {
 
     struct Thing {
         name: String,
-        name_bytes: Vec<u8>,
         number: i32,
+    }
+
+    struct ThingH {
+        name_len: [u8; 2],
+        number_len: [u8; 2],
+    }
+
+    struct ThingP {
+        name_bytes: Vec<u8>,
         number_bytes: Vec<u8>,
+    }
+
+    impl From<&ThingP> for ThingH {
+        fn from(value: &ThingP) -> Self {
+            Self {
+                name_len: value.name_bytes.clone().try_into().unwrap(),
+                number_len: value.number_bytes.clone().try_into().unwrap(),
+            }
+        }
+    }
+
+    impl From<&Thing> for ThingP {
+        fn from(value: &Thing) -> Self {
+            Self {
+                name_bytes: value.name.as_bytes().to_vec(),
+                number_bytes: value.number.to_be_bytes().to_vec(),
+            }
+        }
     }
 
     impl Thing {
         fn new(name: &str, number: i32) -> Self {
             Self {
                 name: name.to_string(),
-                name_bytes: name.as_bytes().to_vec(),
                 number,
-                number_bytes: number.to_ne_bytes().to_vec(),
             }
         }
     }
 
     impl ToOutgoing for Thing {
-        fn to_outgoing(&self) -> OutgoingMsg {
+        type H = ThingH;
+        type P = ThingP;
+        fn to_outgoing<'a>(&self, h: &'a Self::H, p: &'a Self::P) -> OutgoingMsg<'a> {
             let mut outgoing = OutgoingMsg::new(self);
-            outgoing.iov.push(IoSlice::new(&self.name_bytes));
-            outgoing.iov.push(IoSlice::new(&self.number_bytes));
+            outgoing.iov.push(IoSlice::new(&h.name_len));
+            outgoing.iov.push(IoSlice::new(&h.number_len));
+            outgoing.iov.push(IoSlice::new(&p.name_bytes));
+            outgoing.iov.push(IoSlice::new(&p.number_bytes));
             outgoing
         }
     }
@@ -78,7 +108,9 @@ mod tests {
     #[tokio::test]
     async fn test_outgoing() -> anyhow::Result<()> {
         let t = Thing::new("name", 1);
-        let o: OutgoingMsg = t.to_outgoing();
+        let p: ThingP = (&t).into();
+        let h: ThingH = (&p).into();
+        let o = t.to_outgoing(&h, &p);
 
         let sock = UnixStream::connect("/foo/bar.sock").await?;
         unsafe { sendmsg(sock.as_raw_fd(), &o.iov, &o.cmsg, MsgFlags::empty(), None::<&UnixAddr>)?; }

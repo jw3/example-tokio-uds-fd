@@ -99,6 +99,7 @@ fn send_msg(stream: &mut UnixStream, mut message: Msg) -> anyhow::Result<()> {
     let second_payload = "!*-*-*-*-*-*-*-*-*-*-*!";
     let t = 1u16.to_be_bytes();
     let size1  = (serialized.len() as u16).to_be_bytes();
+    println!("size1: {}", serialized.len());
     let size2  = (second_payload.len() as u16).to_be_bytes();
     let io_slice1 = IoSlice::new(&t);
     let io_slice2 = IoSlice::new(&size1);
