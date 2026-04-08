@@ -1,7 +1,7 @@
 extern crate core;
 
 use clap::Parser;
-use example_tokio_uds_fd::FileMetadata;
+use example_tokio_uds_fd::{consumer, FileMetadata, Msg};
 use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
 use std::fs;
 use std::io::{ IoSliceMut, Read};
@@ -15,8 +15,8 @@ use std::sync::Arc;
 use anyhow::bail;
 use nix::cmsg_space;
 use nix::errno::Errno;
-use nix::libc::pathconf;
 use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::mpsc::{channel, Sender};
 
 #[derive(Debug, Parser)]
 pub struct Opts {
@@ -31,7 +31,12 @@ async fn main() -> anyhow::Result<()> {
         fs::remove_file(&opts.socket_path)?;
     }
 
-    let mut rx = SocketRx::new(&opts.socket_path);
+    let (tx, rx) = channel(128);
+
+    // external consumer of received data
+    tokio::spawn(consumer::consume(rx));
+
+    let mut rx = SocketRx::new(&opts.socket_path, tx);
     ctrlc::set_handler({
         let sock = opts.socket_path.clone();
         let total_bytes = rx.total_received.clone();
@@ -53,13 +58,15 @@ async fn main() -> anyhow::Result<()> {
 struct SocketRx {
     socket_path: String,
     total_received: Arc<AtomicUsize>,
+    consumer: Sender<Msg>,
 }
 
 impl SocketRx {
-    pub fn new<P: AsRef<Path>>(socket_path: P) -> Self {
+    pub fn new<P: AsRef<Path>>(socket_path: P, consumer: Sender<Msg>) -> Self {
         Self {
             socket_path: socket_path.as_ref().to_string_lossy().to_string(),
             total_received: Arc::new(AtomicUsize::new(0)),
+            consumer,
         }
     }
 
@@ -107,22 +114,15 @@ impl SocketRx {
                 Err(e) => bail!("recvmsg 2 failed: {e}"),
             };
 
-            println!("payload 1: {}", payload.d1.len());
-            println!("payload2- {}", String::from_utf8_lossy(payload.d2.as_slice()));
+            // println!("payload 1: {}", payload.d1.len());
+            // println!("payload2- {}", String::from_utf8_lossy(payload.d2.as_slice()));
 
             match (sz, cmsgs) {
                 (0, _) => break,
                 (_, cmsgs) => match bincode::deserialize::<FileMetadata>(payload.d1.as_slice()) {
                     Ok(metadata) => {
                         i += 1;
-                        println!("=========={i} From iov==========");
-                        println!("Received {:?} metadata (payload1):", metadata.file_type);
-                        println!("\tPath: {}", metadata.path);
-                        println!("\tType: {:?}", metadata.file_type);
-                        println!("\tSize: {} bytes", metadata.size);
-                        println!("\tPermissions: {:o}", metadata.permissions);
-                        println!("\tMIME: {}", metadata.mime_type);
-                        println!("\tExecutable: {}", metadata.is_executable);
+                        //println!("=========={i} From iov==========");
 
                         let mut received_fd: Option<OwnedFd> = None;
                         for cmsg in cmsgs {
@@ -140,30 +140,35 @@ impl SocketRx {
                             }
                         }
                         if let Some(fd) = received_fd {
-                            let mut file = fs::File::from(fd);
+                            self.consumer.send(Msg {
+                                id: i,
+                                metadata,
+                                fd: Arc::new(fd.try_clone().expect("cant clone origin fd")),
+                            }).await?;
 
-                            let mut contents = String::new();
-                            match file.read_to_string(&mut contents) {
-                                Ok(bytes_read) => {
-                                    // keep a running count of total bytes received
-                                    self.total_received.fetch_add(bytes_read, Ordering::Relaxed);
-
-                                    // dump small files or first 128 of large ones
-                                    println!("\tsize: {}", bytes_read);
-                                    if contents.len() > 128 {
-                                        println!("\tpreview:\n{}", &contents[..128]);
-                                    } else {
-                                        println!("\tcontent:\n{}", contents);
-                                    }
-                                }
-                                Err(e) => {
-                                    println!("error: could not read from file descriptor: {}", e);
-                                }
-                            }
+                            // let mut file = fs::File::from(fd);
+                            // let mut contents = String::new();
+                            // match file.read_to_string(&mut contents) {
+                            //     Ok(bytes_read) => {
+                            //         // keep a running count of total bytes received
+                            //         self.total_received.fetch_add(bytes_read, Ordering::Relaxed);
+                            //
+                            //         // dump small files or first 128 of large ones
+                            //         // println!("\tsize: {}", bytes_read);
+                            //         // if contents.len() > 128 {
+                            //         //     println!("\tpreview:\n{}", &contents[..128]);
+                            //         // } else {
+                            //         //     println!("\tcontent:\n{}", contents);
+                            //         // }
+                            //     }
+                            //     Err(e) => {
+                            //         println!("error: could not read from file descriptor: {}", e);
+                            //     }
+                            // }
                         }
                     }
                     Err(e) => {
-                        eprintln!("failed to deserialize metadata: {}", e);
+                        eprintln!("failed to deserialize metadata: {e}");
                     }
                 }
             }

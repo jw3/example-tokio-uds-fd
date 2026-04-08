@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
 
     match tx.send_dir(opts.source_dir).await {
         Ok(()) => println!("done"),
-        Err(e) => println!("error: {}", e),
+        Err(e) => println!("error: {e}"),
     }
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;

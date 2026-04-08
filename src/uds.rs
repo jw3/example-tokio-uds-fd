@@ -29,14 +29,14 @@ impl<'a> OutgoingMsg<'a> {
     }
 }
 
-fn send<H, P>(o: &OutgoingMsg) {
+fn send(o: &OutgoingMsg) {
     println!("send");
 }
 
 #[cfg(test)]
 mod tests {
     use std::os::fd::AsRawFd;
-    use nix::sys::socket::{recvmsg, sendmmsg, sendmsg, MsgFlags, UnixAddr};
+    use nix::sys::socket::{sendmsg, MsgFlags, UnixAddr};
     use tokio::net::UnixStream;
     use super::*;
 

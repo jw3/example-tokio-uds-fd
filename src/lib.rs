@@ -1,12 +1,22 @@
+pub mod consumer;
 mod uds;
 
 use nix::sys::stat::{Mode, SFlag};
 use serde::{Deserialize, Serialize};
 use std::fs::Metadata;
-use std::io::IoSlice;
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+
+#[derive(Clone, Debug)]
+pub struct Msg {
+    pub id: usize,
+    pub metadata: FileMetadata,
+    pub fd: Arc<OwnedFd>,
+}
 
 // metadata tracking
 
