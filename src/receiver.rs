@@ -146,25 +146,18 @@ impl SocketRx {
                                 fd: Arc::new(fd.try_clone().expect("cant clone origin fd")),
                             }).await?;
 
-                            // let mut file = fs::File::from(fd);
-                            // let mut contents = String::new();
-                            // match file.read_to_string(&mut contents) {
-                            //     Ok(bytes_read) => {
-                            //         // keep a running count of total bytes received
-                            //         self.total_received.fetch_add(bytes_read, Ordering::Relaxed);
-                            //
-                            //         // dump small files or first 128 of large ones
-                            //         // println!("\tsize: {}", bytes_read);
-                            //         // if contents.len() > 128 {
-                            //         //     println!("\tpreview:\n{}", &contents[..128]);
-                            //         // } else {
-                            //         //     println!("\tcontent:\n{}", contents);
-                            //         // }
-                            //     }
-                            //     Err(e) => {
-                            //         println!("error: could not read from file descriptor: {}", e);
-                            //     }
-                            // }
+                            let mut file = fs::File::from(fd);
+                            let mut contents = String::new();
+                            match file.read_to_string(&mut contents) {
+                                Ok(bytes_read) => {
+                                    println!("<receiver id={i} size={bytes_read}>");
+                                    // keep a running count of total bytes received
+                                    self.total_received.fetch_add(bytes_read, Ordering::Relaxed);
+                                }
+                                Err(e) => {
+                                    println!("error: could not read from file descriptor: {}", e);
+                                }
+                            }
                         }
                     }
                     Err(e) => {

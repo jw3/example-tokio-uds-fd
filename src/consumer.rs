@@ -5,7 +5,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 
 pub async fn consume(mut rx: Receiver<Msg>) {
     while let Some(msg) = rx.recv().await {
-        println!("<message id={}>", msg.id);
+        println!("<consumer id={}>", msg.id);
         println!("Received {:?} metadata (payload1):", msg.metadata.file_type);
         println!("\tPath: {}", msg.metadata.path);
         println!("\tType: {:?}", msg.metadata.file_type);
@@ -33,6 +33,6 @@ pub async fn consume(mut rx: Receiver<Msg>) {
         } else {
             println!("stream error {}", msg.id);
         }
-        println!("</message>");
+        println!("</consumer>");
     }
 }
