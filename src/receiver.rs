@@ -4,7 +4,8 @@ use clap::Parser;
 use example_tokio_uds_fd::{consumer, FileMetadata, Msg};
 use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags};
 use std::fs;
-use std::io::{ IoSliceMut, Read};
+use std::fs::File;
+use std::io::{IoSliceMut, Read};
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -124,13 +125,13 @@ impl SocketRx {
                         i += 1;
                         //println!("=========={i} From iov==========");
 
-                        let mut received_fd: Option<OwnedFd> = None;
+                        let mut received_fd: Option<File> = None;
                         for cmsg in cmsgs {
                             match cmsg {
                                 ControlMessageOwned::ScmRights(fds) => {
                                     if !fds.is_empty() {
                                         // take ownership of the fd
-                                        received_fd = Some(unsafe { OwnedFd::from_raw_fd(fds[0]) });
+                                        received_fd = Some(unsafe { File::from_raw_fd(fds[0]) });
                                         println!("\tfd: {}", fds[0]);
                                     }
                                 }
@@ -139,25 +140,25 @@ impl SocketRx {
                                 }
                             }
                         }
-                        if let Some(fd) = received_fd {
+                        if let Some(file) = received_fd {
                             self.consumer.send(Msg {
                                 id: i,
                                 metadata,
-                                fd: Arc::new(fd.try_clone().expect("cant clone origin fd")),
+                                file,
                             }).await?;
 
-                            let mut file = fs::File::from(fd);
-                            let mut contents = String::new();
-                            match file.read_to_string(&mut contents) {
-                                Ok(bytes_read) => {
-                                    println!("<receiver id={i} size={bytes_read}>");
-                                    // keep a running count of total bytes received
-                                    self.total_received.fetch_add(bytes_read, Ordering::Relaxed);
-                                }
-                                Err(e) => {
-                                    println!("error: could not read from file descriptor: {}", e);
-                                }
-                            }
+                            // let mut file = fs::File::try_from(file)?;
+                            // let mut contents = String::new();
+                            // match file.read_to_string(&mut contents) {
+                            //     Ok(bytes_read) => {
+                            //         println!("<receiver id={i} size={bytes_read}>");
+                            //         // keep a running count of total bytes received
+                            //         self.total_received.fetch_add(bytes_read, Ordering::Relaxed);
+                            //     }
+                            //     Err(e) => {
+                            //         println!("error: could not read from file descriptor: {}", e);
+                            //     }
+                            // }
                         }
                     }
                     Err(e) => {

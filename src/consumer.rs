@@ -15,12 +15,9 @@ pub async fn consume(mut rx: Receiver<Msg>) {
         println!("\tExecutable: {}", msg.metadata.is_executable);
         println!("\tFile Size: {}", msg.metadata.size);
 
-        // clone the OwnedFd from the Arc for use in tokio stream
-        let cloned_fd = msg.fd.try_clone().expect("can't clone file");
-        let std_file = std::fs::File::from(cloned_fd);
-        let tokio_file = tokio::fs::File::from_std(std_file);
-        let mut stream = FramedRead::new(tokio_file, BytesCodec::new())
-            .map_ok(|b| b.freeze());
+        let f = tokio::fs::File::from_std(msg.file);
+        let mut stream = FramedRead::new(f, BytesCodec::new())
+            .map_ok(|chunk| chunk.freeze());
 
         if let Some(chunk) = stream.try_next().await.unwrap() {
             if let Ok(contents) = std::str::from_utf8(&chunk) {
@@ -33,6 +30,16 @@ pub async fn consume(mut rx: Receiver<Msg>) {
         } else {
             println!("stream error {}", msg.id);
         }
+
         println!("</consumer>");
     }
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut s, "{b:02x}");
+    }
+    s
 }
